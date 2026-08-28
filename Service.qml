@@ -1032,7 +1032,7 @@ Item {
             // tracks the card so the column auto-fits to whichever is widest.
             Layout.preferredWidth: card.implicitWidth
             Layout.alignment: Qt.AlignRight
-            height: card.displayHeight
+            height: card.implicitHeight
 
             // ---- entrance ----
             // New cards fade + scale in and slide down from just above the stack

@@ -32,20 +32,6 @@ BorderSurface {
 
   readonly property bool hovered: hoverTracker.hovered
 
-  // Hover expands the card to surface the full message: the summary and body no
-  // longer clip at their collapsed line budgets. A max-height cap keeps an
-  // enormous body from pushing the stack off-screen.
-  readonly property bool expanded: root.hovered
-  readonly property real maxExpandedHeight: Style.space(340)
-  readonly property int summaryMaxLines: expanded ? 4 : 2
-  readonly property int bodyMaxLines: expanded ? 14 : 3
-  // Height the container should reserve. Collapsed it matches the content; on
-  // hover it grows with the expanded text but is capped so a very long message
-  // doesn't shove the whole stack off the top of the screen (overflow clips).
-  readonly property real displayHeight: root.expanded
-    ? Math.min(root.implicitHeight, root.maxExpandedHeight)
-    : root.implicitHeight
-
   signal closeRequested()
   signal cardClicked()
   // Prefer per-notification media/avatar data, then fall back to the app icon.
@@ -81,8 +67,6 @@ BorderSurface {
   // Add vertical border insets so mainColumn (inset by border on top/left/right)
   // doesn't push content under the bottom edge.
   implicitHeight: mainColumn.implicitHeight + borderTop + borderBottom
-  // Reserve only what the current state needs (capped when expanded).
-  height: root.displayHeight
   radius: cornerRadius
   color: Color.notifications.background
   borderSpec: cardBorderSpec
@@ -181,8 +165,8 @@ BorderSurface {
           font.pixelSize: Style.font.title
           font.bold: true
           wrapMode: Text.WordWrap
-          elide: root.expanded ? Text.ElideNone : Text.ElideRight
-          maximumLineCount: root.summaryMaxLines
+          elide: Text.ElideRight
+          maximumLineCount: 2
         }
 
         Text {
@@ -195,8 +179,8 @@ BorderSurface {
           color: root.bodyColor
           font.pixelSize: Style.font.title
           wrapMode: Text.WordWrap
-          elide: root.expanded ? Text.ElideNone : Text.ElideRight
-          maximumLineCount: root.bodyMaxLines
+          elide: Text.ElideRight
+          maximumLineCount: 3
         }
       }
     }
