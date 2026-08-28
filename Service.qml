@@ -354,6 +354,20 @@ Item {
     while (popupModel.count > 0) dismissPopup(0)
   }
 
+  // Remove a row after its exit animation has played. The delegate captured the
+  // key (originalId + timestamp) when it started animating away; the list may
+  // have shifted since, so locate the row by identity rather than the stale
+  // index.
+  function removePopupByIdentity(originalId, timestamp, reason) {
+    for (var i = 0; i < popupModel.count; i++) {
+      var row = popupModel.get(i)
+      if (row && row.originalId === originalId && row.timestamp === timestamp) {
+        removePopup(i, reason)
+        return
+      }
+    }
+  }
+
   // Run the popup's click action, then dismiss. Omarchy's own toasts carry the
   // action as an argv vector in the `execArgv` role (see execArgvFromHints),
   // which the persistence files preserve, so restored toasts stay clickable.
@@ -989,7 +1003,12 @@ Item {
         anchors.rightMargin: popupWindow.popupPlacement.margins.right
         spacing: Style.space(8)
 
+        // The tail is a Repeater in an auto-sizing column (so hover expansion
+        // grows the stack naturally). Repeater has no transition properties, so
+        // the add/remove animation lives in the delegate's Behaviors plus the
+        // service's animated removal (see dismissPopup/expirePopup).
         Repeater {
+          id: popupRepeater
           model: popupModel
 
           // The delegate is a slot Item that owns lifetime timer state. The
@@ -998,6 +1017,7 @@ Item {
           delegate: Item {
             id: cardSlot
             required property int index
+            required property int originalId
             required property string app
             required property string appIcon
             required property string summary
@@ -1012,7 +1032,66 @@ Item {
             // tracks the card so the column auto-fits to whichever is widest.
             Layout.preferredWidth: card.implicitWidth
             Layout.alignment: Qt.AlignRight
-            implicitHeight: card.implicitHeight
+            height: card.displayHeight
+
+            // ---- entrance ----
+            // New cards fade + scale in and slide down from just above the stack
+            // into their resting spot. The slide is a one-off NumberAnimation on
+            // entranceShift (NOT a Behavior): the entering card teleports above
+            // once its real height is known, then glides down.
+            opacity: 0
+            scale: 0.92
+            Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+            Behavior on scale { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+            // ---- exit ----
+            // Drives the Windows-style slide-out to the right (a transform so
+            // nothing re-lays-out the column mid-flight) plus a fade.
+            property real entranceShift: 0
+            property real exitShift: 0
+            transform: Translate { x: cardSlot.exitShift; y: cardSlot.entranceShift }
+            Behavior on exitShift { NumberAnimation { duration: 260; easing.type: Easing.InOutCubic } }
+            Behavior on y { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+            Behavior on height { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+
+            // Animate this toast away (slide right + fade) through the Behaviors
+            // above, then hand off to the service for the final model removal.
+            property string exitReason: ""
+            property int exitOriginalId: -1
+            property double exitTimestamp: 0
+            Timer {
+              id: exitTimer
+              interval: 280
+              repeat: false
+              onTriggered: service.removePopupByIdentity(
+                cardSlot.exitOriginalId, cardSlot.exitTimestamp, cardSlot.exitReason)
+            }
+            function animateOut(reason) {
+              cardSlot.exitReason = reason
+              cardSlot.exitOriginalId = cardSlot.originalId
+              cardSlot.exitTimestamp = cardSlot.timestamp
+              cardSlot.exitShift = 520
+              cardSlot.opacity = 0
+              exitTimer.restart()
+            }
+
+            // Hop to visible once created. Slide down after the layout knows the
+            // card's real height (it is 0 during Component.onCompleted).
+            Component.onCompleted: {
+              cardSlot.opacity = 1
+              cardSlot.scale = 1
+              Qt.callLater(cardSlot.slideIn)
+            }
+            function slideIn() {
+              // Height is laid out now; start the card a full card-height above
+              // the stack and glide it down into place.
+              cardSlot.entranceShift = -cardSlot.height
+              var anim = Qt.createQmlObject(
+                'import QtQuick; NumberAnimation { to: 0; duration: 300; easing.type: Easing.OutCubic }',
+                cardSlot)
+              anim.target = cardSlot
+              anim.property = "entranceShift"
+              anim.start()
+            }
 
             readonly property real lifetime: service.durationFor(cardSlot.urgency, cardSlot.expireTimeout)
             property real remainingLifetime: 1.0
@@ -1029,6 +1108,7 @@ Item {
             onImageChanged: cardSlot.remainingLifetime = 1.0
 
             Timer {
+              id: countdown
               interval: 50
               repeat: true
               running: cardSlot.ticking
@@ -1037,7 +1117,8 @@ Item {
                 cardSlot.remainingLifetime -= 50.0 / cardSlot.lifetime
                 if (cardSlot.remainingLifetime <= 0) {
                   cardSlot.remainingLifetime = 0
-                  service.expirePopup(cardSlot.index)
+                  countdown.running = false
+                  cardSlot.animateOut("expire")
                 }
               }
             }
@@ -1056,7 +1137,7 @@ Item {
               fontFamily: service.shell && service.shell.bar ? service.shell.bar.fontFamily : ""
               glyph: cardSlot.glyph
 
-              onCloseRequested: service.dismissPopup(cardSlot.index)
+              onCloseRequested: cardSlot.animateOut("dismiss")
               onCardClicked: service.invokePopupDefault(cardSlot.index)
             }
           }
