@@ -15,6 +15,9 @@ Item {
   id: service
 
   signal notificationActedUpon(int originalId)
+  // Emitted after a history-mutating file job (archive/write/clear) finishes
+  // writing, so bar widgets can refresh their on-disk history without polling.
+  signal historyChanged()
 
   // Injected by omarchy-shell (the first-party service loader).
   property var shell: null
@@ -463,6 +466,21 @@ Item {
     runNextPopupFileJob()
   }
 
+  // Wrap a job's done callback so the historyChanged signal only fires after
+  // the file write actually landed on disk (done runs when the job exits).
+  function afterHistoryWrite(done) {
+    return function() {
+      if (done) {
+        try {
+          done()
+        } catch (e) {
+          console.warn("notifications: history job callback failed:", e)
+        }
+      }
+      service.historyChanged()
+    }
+  }
+
   function enqueueHistoryRead() {
     popupFileQueue = popupFileQueue.concat([{ read: true }])
     runNextPopupFileJob()
@@ -567,7 +585,7 @@ Item {
       String(historyLimit),
       NotificationLogic.popupFileName(row),
       popupStateDir,
-      imagesDir])
+      imagesDir], afterHistoryWrite())
   }
 
   // Record a notification that never made it to the screen (DND silenced it),
@@ -600,7 +618,7 @@ Item {
       imagesDir]
     for (var i = 0; i < persistable.copies.length; i++)
       command.push(persistable.copies[i].from, persistable.copies[i].to)
-    enqueuePopupFileJob(command, done)
+    enqueuePopupFileJob(command, afterHistoryWrite(done))
   }
 
   function clearHistory() {
@@ -609,7 +627,7 @@ Item {
       "  [[ -e $f ]] || continue\n" +
       "  stale=\"${f##*/}\"\n" +
       "  rm -f \"$f\" \"$2/${stale%.json}\"-*\n" +
-      "done", "--", historyDir, imagesDir])
+      "done", "--", historyDir, imagesDir], afterHistoryWrite())
   }
 
   // A restart can kill a queued job between its cp and its JSON write,
@@ -1079,6 +1097,7 @@ Item {
             Component.onCompleted: {
               cardSlot.opacity = 1
               cardSlot.scale = 1
+              cardSlot.armExpiry()
               Qt.callLater(cardSlot.slideIn)
             }
             function slideIn() {
@@ -1094,8 +1113,22 @@ Item {
             }
 
             readonly property real lifetime: service.durationFor(cardSlot.urgency, cardSlot.expireTimeout)
-            property real remainingLifetime: 1.0
-            readonly property bool ticking: cardSlot.lifetime > 0 && !card.hovered
+            // Wall-clock deadline at which this toast auto-expires. Counted only
+            // while visible and not hovered, so pause/resume is exact.
+            property double expiresAt: Date.now() + cardSlot.lifetime
+
+            function armExpiry() {
+              if (cardSlot.lifetime <= 0) { expiryTimer.stop(); return }
+              cardSlot.expiresAt = Date.now() + cardSlot.lifetime
+              expiryTimer.interval = cardSlot.lifetime
+              expiryTimer.start()
+            }
+            function pauseExpiry() { expiryTimer.stop() }
+            function resumeExpiry() {
+              if (cardSlot.lifetime <= 0) { expiryTimer.stop(); return }
+              expiryTimer.interval = Math.max(1, cardSlot.expiresAt - Date.now())
+              expiryTimer.start()
+            }
 
             // A client updating this notification in place rewrites the row
             // under the card (see refreshPopup). New text deserves a full look,
@@ -1103,23 +1136,18 @@ Item {
             // superseded text was already most of the way through. Delegates
             // keep their own row as the model changes around them, so only a
             // real content change lands here.
-            onSummaryChanged: cardSlot.remainingLifetime = 1.0
-            onBodyChanged: cardSlot.remainingLifetime = 1.0
-            onImageChanged: cardSlot.remainingLifetime = 1.0
-
+            onSummaryChanged: cardSlot.armExpiry()
+            onBodyChanged: cardSlot.armExpiry()
+            onImageChanged: cardSlot.armExpiry()
+            // The timer is event-driven: it fires once at the deadline only.
             Timer {
-              id: countdown
-              interval: 50
-              repeat: true
-              running: cardSlot.ticking
+              id: expiryTimer
+              interval: 1
+              repeat: false
+              running: false
               onTriggered: {
                 if (cardSlot.lifetime <= 0) return
-                cardSlot.remainingLifetime -= 50.0 / cardSlot.lifetime
-                if (cardSlot.remainingLifetime <= 0) {
-                  cardSlot.remainingLifetime = 0
-                  countdown.running = false
-                  cardSlot.animateOut("expire")
-                }
+                cardSlot.animateOut("expire")
               }
             }
 
@@ -1139,6 +1167,16 @@ Item {
 
               onCloseRequested: cardSlot.animateOut("dismiss")
               onCardClicked: service.invokePopupDefault(cardSlot.index)
+            }
+
+            // Hovering freezes a toast in place (like the old countdown's
+            // pause); arm/resume as the hover state flips, nothing while idle.
+            Connections {
+              target: card
+              function onHoveredChanged() {
+                if (card.hovered) cardSlot.pauseExpiry()
+                else cardSlot.resumeExpiry()
+              }
             }
           }
         }
