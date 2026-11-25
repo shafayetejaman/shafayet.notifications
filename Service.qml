@@ -890,7 +890,18 @@ Item {
 
   // ---------------------------------------------------- IPC
 
+  // Omarchy's global shortcuts call runShortcut() on the enabled
+  // notifications service. Because this plugin declares `clonedFrom`, the
+  // shell resolves "omarchy.notifications" to this service — so without this
+  // bridge Super+comma and friends hit an undefined function and do nothing.
+  function runShortcut(method) {
+    if (!ipcHandler || typeof ipcHandler[method] !== "function") return false
+    ipcHandler[method]()
+    return true
+  }
+
   IpcHandler {
+    id: ipcHandler
     target: "notifications"
 
     function dndState(): string {
@@ -913,6 +924,10 @@ Item {
       return dndState()
     }
 
+    // Super+comma: act on the newest toast. This plugin has no multi-action
+    // keyboard mode, so the default action is the closest equivalent.
+    function act(): string { return invokeLast() }
+
     // Replay the notifications that have been moved into the history dir.
     function showHistory(): string {
       return service.showRecentHistory()
@@ -926,6 +941,8 @@ Item {
 
     function dismissAll(): string {
       service.clearPopups()
+      // Tell the bar to drop its unread glyph even when the center is closed.
+      service.notificationActedUpon(-1)
       return "ok"
     }
 
@@ -933,6 +950,7 @@ Item {
     function dismissOne(): string {
       if (popupModel.count === 0) return "none"
       service.dismissPopup(0)
+      service.notificationActedUpon(-1)
       return "ok"
     }
 

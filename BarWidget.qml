@@ -18,6 +18,7 @@ import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "NotificationLogic.js" as NotificationLogic
 
@@ -98,12 +99,14 @@ BarWidget {
     return "󰂚"
   }
 
-  // Theme palette (mirrors the old widget's tokens).
-  readonly property color colForeground: Color.foreground
-  readonly property color colDim: Qt.darker(Color.foreground, 1.4)
-  readonly property color colBorder: Style.normalBorderFor(Color.foreground, Color.accent)
-  readonly property color colSurface: Style.normalFillFor(Color.foreground, Color.accent)
-  readonly property color colAccent: Color.accent
+  // Theme palette. Use the popup surface roles so the center follows the
+  // theme's `[popups]` colors, not just the generic foreground token.
+  // The `Commons.` prefix matters: bare `Color` is Qt's built-in QML type.
+  readonly property color colForeground: Commons.Color.popups.text
+  readonly property color colDim: Qt.darker(colForeground, 1.4)
+  readonly property color colBorder: Style.normalBorderFor(colForeground, Commons.Color.accent)
+  readonly property color colSurface: Commons.Color.popups.background
+  readonly property color colAccent: Commons.Color.accent
   readonly property int cardRadius: notificationService && notificationService.cornerRadius
     ? notificationService.cornerRadius : Style.cornerRadius
 
@@ -387,7 +390,9 @@ BarWidget {
       // this path catches replay dismissals that never touch historyDir.
       root.queueRebuild()
       root.queueHistoryRefresh()
-      if (root.popupOpen && root.liveCount === 0) root.unread = false
+      // A shortcut can dismiss the last toast while the center is closed.
+      // No live rows means nothing is unread, regardless of popup state.
+      if (root.liveCount === 0) root.unread = false
     }
     function onModelReset() { root.queueRebuild() }
   }
@@ -672,7 +677,7 @@ BarWidget {
               visible: glyph !== ""
               text: glyph
               textFormat: Text.PlainText
-              color: urgency === 2 ? Color.urgent : Color.accent
+              color: urgency === 2 ? Commons.Color.urgent : Commons.Color.accent
               font.family: root.bar ? root.bar.fontFamily : ""
               font.pixelSize: Style.font.icon
             }
